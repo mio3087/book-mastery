@@ -16,9 +16,11 @@
     "papaparse": "^5.7.1",
     "pdfjs-dist": "^6.5.438",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@types/react": "19.3.3",
     "eslint": "^9",
     "eslint-config-next": "16.4.6"
   }

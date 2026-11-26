@@ -66,6 +66,27 @@ import {
 
 
 const EN_UI = {
+  "教材スキャナー": "Textbook Scanner",
+  "写真を選択・撮影": "Choose or take photos",
+  "PDFを選択": "Choose PDF",
+  "文字認識中": "Recognizing text",
+  "PDFを読み込み中": "Reading PDF",
+  "抽出した文章を確認・修正してください。": "Review and correct extracted text.",
+  "画像・PDFの文字を教材本文に追加します。": "Extract text from images and PDFs into the source text.",
+  "スキャンに失敗しました": "Scan failed",
+  "文字を抽出できませんでした。画像として撮影し直すか、ChatGPTに直接添付してください。": "No text extracted. Take photos or attach the file directly to ChatGPT.",
+  "最大10枚、各20MBまで。PDFは最大30ページ、50MBまで。": "Up to 10 images, 20 MB each. PDF: up to 30 pages and 50 MB.",
+  "スキャン中は教材を変更しないでください。": "Do not change books during scanning.",
+  "写真・PDFはChatGPT側にも添付すると精度を確認できます。": "Attach the original photos or PDF to ChatGPT to verify accuracy.",
+  "ファイルの上限を超えています。": "File limit exceeded.",
+  "対象の章": "Chapter",
+  "対象ページ": "Pages",
+  "教材本文（任意）": "Source text (optional)",
+  "生成されたプロンプト": "Generated prompt",
+  "問題生成プロンプトを作成": "Generate prompt",
+  "生成されたJSONを取り込む": "Import generated JSON",
+  "教材をChatGPTで分析し、知識と問題を一括登録します。": "Analyze source material with ChatGPT and import knowledge and questions.",
+
   "教材をChatGPTで分析し、知識と問題を一括登録します。": "Analyze textbook content with ChatGPT and import knowledge and exercises.",
   "対象の章": "Chapter",
   "対象ページ": "Pages",
@@ -1611,6 +1632,16 @@ function Workspace({ user }) {
   const [labPages, setLabPages] = useState("");
   const [labChapter, setLabChapter] = useState("");
   const [labPrompt, setLabPrompt] = useState("");
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanStatus, setScanStatus] = useState("");
+  const scanLock = useRef(false);
+  const scanGeneration = useRef(0);
+  useEffect(() => {
+    scanGeneration.current += 1;
+    setLabText(""); setLabPrompt(""); setLabPages(""); setLabChapter(""); setScanStatus("");
+    return () => { scanGeneration.current += 1; };
+  }, [bookId]);
+
   const [importText, setImportText] = useState("");
   const [importFormat, setImportFormat] = useState("json");
   const [importRows, setImportRows] = useState([]);
@@ -3043,13 +3074,66 @@ function Workspace({ user }) {
   // BOOK PROJECT
   // ================================================
 
+  async function scanTextbook(files, kind) {
+    if (!files.length || scanLock.current) return;
+    const generation = scanGeneration.current;
+    const active = () => generation === scanGeneration.current;
+    scanLock.current = true;
+    setScanBusy(true);
+    setScanStatus("");
+    let worker, pdf;
+    const chunks = [];
+    try {
+      if (kind === "image") {
+        if (files.length > 10 || files.some(f => f.size > 20 * 1024 * 1024)) throw new Error(t("ファイルの上限を超えています。"));
+        const { createWorker } = await import("tesseract.js");
+        const langs = {it:"ita",fr:"fra",es:"spa",de:"deu",en:"eng","zh-CN":"chi_sim","zh-TW":"chi_tra",ko:"kor"};
+        worker = await createWorker([...new Set([langs[book.language] || "eng", "jpn", "eng"])], 1, {
+          logger: m => { if (active() && m.status === "recognizing text") setScanStatus(t("文字認識中") + " " + Math.round(m.progress * 100) + "%"); }
+        });
+        for (let i=0;i<files.length;i++) {
+          if (!active()) return;
+          const result = await worker.recognize(files[i]);
+          if (result.data.text.trim()) chunks.push("[Image " + (i+1) + "]\n" + result.data.text.trim());
+        }
+      } else {
+        if (files[0].size > 50 * 1024 * 1024) throw new Error(t("ファイルの上限を超えています。"));
+        const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+        pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+        pdf = await pdfjs.getDocument({data: new Uint8Array(await files[0].arrayBuffer()), isEvalSupported:false}).promise;
+        if (pdf.numPages > 30) throw new Error(t("ファイルの上限を超えています。"));
+        for (let i=1;i<=pdf.numPages;i++) {
+          if (!active()) return;
+          setScanStatus(t("PDFを読み込み中") + " " + i + "/" + pdf.numPages);
+          const p = await pdf.getPage(i);
+          const content = await p.getTextContent();
+          const text = content.items.map(x => (x.str || "") + (x.hasEOL ? "\n" : " ")).join("").trim();
+          chunks.push("[PDF page " + i + "]\n" + (text || "[No extractable text]"));
+        }
+        if (chunks.every(x=>x.endsWith("[No extractable text]"))) chunks.length=0;
+      }
+      if (!active()) return;
+      if (!chunks.length) throw new Error(t("文字を抽出できませんでした。画像として撮影し直すか、ChatGPTに直接添付してください。"));
+      setLabText(old => [old, ...chunks].filter(Boolean).join("\n\n"));
+      setLabPrompt("");
+      setScanStatus(t("抽出した文章を確認・修正してください。"));
+    } catch (err) {
+      if (active()) setScanStatus(t("スキャンに失敗しました") + ": " + (err?.message || String(err)));
+    } finally {
+      try { if (worker) await worker.terminate(); } catch {}
+      try { if (pdf) await pdf.destroy(); } catch {}
+      scanLock.current = false;
+      setScanBusy(false);
+    }
+  }
+
   function renderTextbookLab() {
     const makePrompt = () => {
       const schema = {items:[{chapter:labChapter,section:"",title:"知識項目名",category:"文法",explanation:"日本語解説",example:"対象言語の例文",translation:"日本語訳",rules:"規則",exceptions:"例外",related:"関連項目",transfer:"他言語比較",page:labPages,source:"教材",difficulty:2,questions:[{type:"穴埋め問題",skill:"文法理解",prompt:"問題文",answers:["正解"],options:[],explanation:"正解の理由",hint:"ヒント",page:labPages,source:"AI生成",difficulty:2,application:false,selfGrade:false,purpose:"study"}]}]};
       setLabPrompt([
         "あなたは語学教材の専門家です。以下の教材から知識項目とオリジナル練習問題を作成してください。",
         "教材情報: " + JSON.stringify({title:book.title,language:book.language,chapter:labChapter,pages:labPages}),
-        "添付画像・PDFまたは末尾の教材本文だけを根拠に、規則・例外・注釈を細分化してください。判読不能箇所は推測しないでください。教材の文章を長く転載せず、解説は日本語、例文は対象言語で新規作成してください。",
+        "添付画像・PDFまたは末尾の教材本文だけを根拠に、規則・例外・注釈を細分化してください。判読不能箇所は推測しないでください。OCRの誤認識やPDFの抽出順序に注意し、原画像が添付されていれば原画像を優先してください。PDF内ページ番号と書籍の印刷ページ番号を混同しないでください。教材の文章を長く転載せず、解説は日本語、例文は対象言語で新規作成してください。",
         "各項目に認識・想起・初見応用の異なる問題を作成し、正解と解説を必ず付けてください。自由回答はselfGrade:trueとし模範解答を付けてください。四択は異なる4選択肢を用意してください。重複問題は禁止。",
         "使用可能なtype: " + QUESTION_TYPES.join(" / "),
         "使用可能なskill: " + SKILLS.join(" / "),
@@ -3065,8 +3149,17 @@ function Workspace({ user }) {
       <Field label="対象ページ" value={labPages} onChange={setLabPages} placeholder="12–17"/>
       <Field label="教材本文（任意）" value={labText} onChange={setLabText} multiline/>
       <input type="file" accept=".txt,.md,text/plain" onChange={async e=>{const f=e.target.files?.[0];if(!f)return;try{if(f.size>1024*1024)throw new Error("1 MB limit");setLabText(await f.text());}catch(err){setNotice(err.message);}}}/>
-      <p>{t("写真・PDFはChatGPT側に添付してください。このアプリでは画像解析を行いません。")}</p>
-      <Button onClick={makePrompt}>{t("問題生成プロンプトを作成")}</Button>
+      <div className="bm-field">
+        <h3>{t("教材スキャナー")}</h3>
+        <p>{t("画像・PDFの文字を教材本文に追加します。")}</p>
+        <label>{t("写真を選択・撮影")}<input type="file" accept="image/*" multiple disabled={scanBusy} onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value="";void scanTextbook(files,"image");}}/></label>
+        <label>{t("PDFを選択")}<input type="file" accept="application/pdf,.pdf" disabled={scanBusy} onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value="";void scanTextbook(files,"pdf");}}/></label>
+        <small>{t("最大10枚、各20MBまで。PDFは最大30ページ、50MBまで。")}</small>
+        {scanBusy && <p>{t("スキャン中は教材を変更しないでください。")}</p>}
+        {scanStatus && <p role="status" aria-live="polite">{scanStatus}</p>}
+        <p>{t("写真・PDFはChatGPT側にも添付すると精度を確認できます。")}</p>
+      </div>
+      <Button disabled={scanBusy} onClick={makePrompt}>{t("問題生成プロンプトを作成")}</Button>
       {labPrompt && <><Field label="生成されたプロンプト" value={labPrompt} onChange={setLabPrompt} multiline/><div className="bm-actions"><Button onClick={()=>copyText(labPrompt)}>{t("コピー")}</Button><a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">ChatGPT</a><Button secondary onClick={()=>{openImport();setImportFormat("json");}}>{t("生成されたJSONを取り込む")}</Button></div></>}
     </Card>;
   }
