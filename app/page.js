@@ -11,6 +11,8 @@ import {
 
 import {
   getAuth,
+  setPersistence,
+  browserLocalPersistence,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -66,6 +68,7 @@ import {
 
 
 const EN_UI = {
+  "ブラウザの保存機能を有効にしてください。プライベートブラウズではログインを保持できない場合があります。": "Enable browser storage. Private browsing may not retain sign-in.",
   "文法・知識を確認": "View grammar / knowledge",
   "解説を閉じる": "Hide explanation",
   "わからない・解説を見る": "I don't know — show answer",
@@ -1504,12 +1507,14 @@ function AuthScreen() {
           "パスワード再設定メールを送信しました。"
         );
       } else if (mode === "register") {
+        await setPersistence(auth, browserLocalPersistence);
         await createUserWithEmailAndPassword(
           auth,
           email.trim(),
           password
         );
       } else {
+        await setPersistence(auth, browserLocalPersistence);
         await signInWithEmailAndPassword(
           auth,
           email.trim(),
@@ -1518,6 +1523,7 @@ function AuthScreen() {
       }
     } catch (error) {
       const messages = {
+        "auth/web-storage-unsupported": "ブラウザの保存機能を有効にしてください。プライベートブラウズではログインを保持できない場合があります。",
         "auth/invalid-credential":
           "メールアドレスまたはパスワードを確認してください。",
         "auth/email-already-in-use":
@@ -1702,7 +1708,8 @@ function Workspace({ user }) {
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useState("study");
+  const initialStudyStarted = useRef(false);
   const [mobileMenu, setMobileMenu] = useState(false);
 
   const [bookId, setBookId] = useState("");
@@ -1927,6 +1934,18 @@ function Workspace({ user }) {
     "study",
     settings.dailyMinutes
   );
+
+  // Start a fresh prioritized session once all user data has loaded.
+  useEffect(() => {
+    if (initialStudyStarted.current || ready.length !== COLLECTIONS.length || syncError) return;
+    initialStudyStarted.current = true;
+    if (page !== "study" || session) return;
+    if (!book) { setPage("library"); return; }
+    if (!todayPlan.length) return;
+    setSession({ id: uid(), mode: "study", bookId: book.id,
+      queue: todayPlan, index: 0, results: [], finished: false });
+    resetAnswer();
+  }, [ready.length, syncError, page, session, book, todayPlan]);
 
   const firstPriority = items.find(
     (i) => i.id === todayPlan[0]?.itemId
