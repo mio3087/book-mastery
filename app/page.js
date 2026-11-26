@@ -1,5 +1,4 @@
 
-
 "use client";
 
 import { useState, useEffect, useMemo, useRef, createContext, useContext } from "react";
@@ -67,6 +66,17 @@ import {
 
 
 const EN_UI = {
+  "文法・知識を確認": "View grammar / knowledge",
+  "解説を閉じる": "Hide explanation",
+  "わからない・解説を見る": "I don't know — show answer",
+  "未習得として記録": "Recorded for review",
+  "解説を参照して正解": "Correct with assistance",
+  "この項目の解説は未登録です。": "No explanation registered for this item.",
+  "苦手問題をもう一度": "Retry weak questions",
+  "自力正解数": "Independent correct answers",
+  "解説・ヒント利用": "Assistance used",
+  "わからなかった問題": "Unknown answers",
+  "保存に失敗しました。もう一度お試しください。": "Save failed. Please try again.",
   "一括読み取り": "Universal Import",
   "複数形式のファイルを選択": "Select mixed file types",
   "読み取り結果": "Import results",
@@ -1191,8 +1201,8 @@ function optimizeQuestions(
 
     if (mode === "mistakes") {
       return (
-        record?.errors > 0 &&
-        (record.recentAccuracy ?? 0) < 100
+        (record?.errors > 0 && (record.recentAccuracy ?? 0) < 100) ||
+        (history.length > 0 && [...history].sort((a,b)=>b.createdAt-a.createdAt)[0].hintUsed === true)
       );
     }
 
@@ -1753,6 +1763,8 @@ function Workspace({ user }) {
   const [session, setSession] = useState(null);
   const [answer, setAnswer] = useState("");
   const [hintUsed, setHintUsed] = useState(false);
+  const [hintOpen, setHintOpen] = useState(false);
+  const [lessonOpen, setLessonOpen] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [confidence, setConfidence] = useState("3");
   const [mistakeCause, setMistakeCause] =
@@ -2549,8 +2561,8 @@ function Workspace({ user }) {
     if (!success) setImportError("保存に失敗しました。再プレビューして未保存項目を確認してください。");
 
     if (success) {
-  setModal(null);
-}
+      setModal(null);
+    }
   }
 
   // ================================================
@@ -2560,6 +2572,8 @@ function Workspace({ user }) {
   function resetAnswer() {
     setAnswer("");
     setHintUsed(false);
+    setHintOpen(false);
+    setLessonOpen(false);
     setRevealed(false);
     setConfidence("3");
     setMistakeCause("原因未確定");
@@ -2657,7 +2671,7 @@ function Workspace({ user }) {
     return submitAnswer(correct, "automatic");
   }
 
-  async function submitAnswer(correct, grading) {
+  async function submitAnswer(correct, grading, unknown = false) {
     if (
       !currentQuestion ||
       feedback ||
@@ -2692,11 +2706,12 @@ function Workspace({ user }) {
       questionId: currentQuestion.id,
       prompt: currentQuestion.prompt,
       expected: currentQuestion.answers || [],
-      answer,
+      answer: unknown ? "" : answer,
       correct,
       grading,
-      hintUsed,
-      confidence: Number(confidence),
+      hintUsed: hintUsed || unknown,
+      unknown,
+      confidence: unknown ? 1 : Number(confidence),
       seconds: Math.max(
         1,
         Math.round((Date.now() - startedAt.current) / 1000)
@@ -2722,6 +2737,7 @@ function Workspace({ user }) {
     );
 
     if (success) {
+      setRevealed(true);
       setFeedback(attempt);
 
       setSession((previous) => ({
@@ -2730,6 +2746,7 @@ function Workspace({ user }) {
       }));
     } else {
       setRevealed(false);
+      setNotice("保存に失敗しました。もう一度お試しください。");
     }
   }
 
@@ -3777,6 +3794,22 @@ function Workspace({ user }) {
   // STUDY
   // ================================================
 
+  function renderStudyLesson() {
+    const content = [
+      ["解説", currentItem?.explanation],
+      ["規則", currentItem?.rules],
+      ["例外", currentItem?.exceptions],
+      ["例文", currentItem?.example],
+      ["日本語訳", currentItem?.translation],
+      ["発音", currentItem?.pronunciation],
+      ["他言語比較", currentItem?.transfer],
+    ].filter(([, value]) => String(value || "").trim());
+    return <div className="bm-answer-panel">
+      <h3>{currentItem?.title || t("解説")}</h3>
+      {content.length ? content.map(([label,value]) => <div key={label} style={{marginBottom:12}}><b>{t(label)}</b><div className="bm-pre">{value}</div></div>) : <p>{t("この項目の解説は未登録です。")}</p>}
+    </div>;
+  }
+
   function renderStudy() {
     if (!session) {
       return (
@@ -3813,6 +3846,9 @@ function Workspace({ user }) {
           <div className="bm-grid three">
             <Metric label="回答数" value={results.length} />
             <Metric label="正解数" value={correct} />
+            <Metric label="自力正解数" value={results.filter(a=>a.correct&&!a.hintUsed).length} />
+            <Metric label="解説・ヒント利用" value={results.filter(a=>a.hintUsed&&!a.unknown).length} />
+            <Metric label="わからなかった問題" value={results.filter(a=>a.unknown).length} />
             <Metric
               label="誤答数"
               value={results.length - correct}
@@ -3853,6 +3889,12 @@ function Workspace({ user }) {
 
           <div className="bm-actions">
             <Button onClick={() => startStudy()}>{t("次の学習")}</Button>
+            <Button secondary disabled={!results.some(a=>!a.correct||a.hintUsed)} onClick={()=>{
+              const ids=new Set(results.filter(a=>!a.correct||a.hintUsed).map(a=>a.questionId));
+              const queue=session.queue.filter(q=>ids.has(q.id)&&q.purpose==="study");
+              if (!queue.length) {startStudy("mistakes");return;}
+              setSession({id:uid(),mode:"study",bookId:session.bookId,queue,index:0,results:[],finished:false});resetAnswer();
+            }}>{t("苦手問題をもう一度")}</Button>
 
             <Button
               secondary
@@ -3997,15 +4039,16 @@ function Workspace({ user }) {
                 ]}
               />
 
-              {session.mode !== "diagnostic" && (
-                <Button
-                  secondary
-                  onClick={() => setHintUsed(true)}
-                >
-                  <Lightbulb size={17} />{t("ヒント")}</Button>
-              )}
+              <div className="bm-actions">
+                {session.mode !== "diagnostic" && <>
+                  <Button secondary disabled={saving} onClick={() => {setHintUsed(true);setHintOpen(v=>!v);}}><Lightbulb size={17}/>{t("ヒント")}</Button>
+                  <Button secondary disabled={saving} onClick={() => {setHintUsed(true);setLessonOpen(v=>!v);}}><BookOpen size={17}/>{t(lessonOpen ? "解説を閉じる" : "文法・知識を確認")}</Button>
+                </>}
+                <Button secondary disabled={saving} onClick={() => {void submitAnswer(false,"unknown",true);}}><AlertCircle size={17}/>{t("わからない・解説を見る")}</Button>
+              </div>
+              {lessonOpen && renderStudyLesson()}
 
-              {hintUsed && (
+              {hintOpen && (
                 <div className="bm-notice">
                   {currentQuestion.hint ||
                     "この問題にはヒントが登録されていません。"}
@@ -4035,7 +4078,8 @@ function Workspace({ user }) {
                   "自己評価で確認してください。"}
               </div>
 
-              <p>{currentQuestion.explanation}</p>
+              <div className="bm-pre">{currentQuestion.explanation}</div>
+              {(session.mode !== "diagnostic" || feedback) && renderStudyLesson()}
 
               {!feedback && selfGrading && (
                 <>
@@ -4078,7 +4122,7 @@ function Workspace({ user }) {
                 )}
 
                 <b>
-                  {feedback.correct ? t("正解") : t("要復習")}
+                  {feedback.unknown ? t("未習得として記録") : feedback.correct ? t(feedback.hintUsed ? "解説を参照して正解" : "正解") : t("要復習")}
                   {feedback.grading === "self" &&
                     "（自己評価）"}
                 </b>
