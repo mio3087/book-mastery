@@ -1710,6 +1710,9 @@ function Workspace({ user }) {
   const [saving, setSaving] = useState(false);
 
   const [page, setPage] = useState("study");
+  const [mysteryOpen, setMysteryOpen] = useState(false);
+  const [mysteryReveal, setMysteryReveal] = useState(false);
+  const [mysteryIndex, setMysteryIndex] = useState(0);
   const initialStudyStarted = useRef(false);
   const [mobileMenu, setMobileMenu] = useState(false);
 
@@ -5129,6 +5132,29 @@ function Workspace({ user }) {
   // RENDER WORKSPACE
   // ================================================
 
+  function renderMystery() {
+    const lang = (ja, en) => t("Dashboard") === "Dashboard" ? en : ja;
+    const history = data.attempts;
+    const dates = [...new Set(history.map(a => a.date).filter(Boolean))].sort();
+    const missed = new Set(), recoveredIds = new Set();
+    [...history].sort((a,b)=>a.createdAt-b.createdAt).forEach(a=>{if(!a.questionId)return; if(!a.correct) missed.add(a.questionId); else if(missed.has(a.questionId)) recoveredIds.add(a.questionId);});
+    const recovered = recoveredIds.size;
+    const languages = [...new Set(data.books.map(b => b.language).filter(Boolean))];
+    const examples = items.filter(i => i.example && questions.some(q => q.itemId === i.id));
+    const sample = examples.length ? examples[mysteryIndex % examples.length] : null;
+    return <section className="bm-mystery" aria-label="Mystery Update">
+      <div className="bm-mystery-top"><div><small>BOOK MASTERY · THE SECRET ROOM</small><h2>{lang("あなたの知識宇宙", "Your knowledge universe")}</h2></div><button type="button" onClick={() => setMysteryOpen(false)} aria-label={lang("閉じる", "Close")}>×</button></div>
+      <svg viewBox="0 0 320 130" width="100%" role="img" aria-label={lang("教材の星座", "Book constellation")}>
+        {Array.from({length:45}, (_,i) => <circle key={i} cx={(i*73+17)%320} cy={(i*47+11)%130} r={i%5===0?1.5:.6} fill="#dce6ff" opacity=".45"/>)}
+        {data.books.slice(0,18).map((b,i) => { const x=160+Math.cos(i*2.4)*(28+i*5), y=65+Math.sin(i*2.4)*(18+i*2.1); return <g key={b.id}><line x1="160" y1="65" x2={x} y2={y} stroke="#a5b4fc" opacity=".3"/><circle cx={x} cy={y} r="4" fill="#c4b5fd"><title>{b.title}</title></circle></g>; })}
+        <circle cx="160" cy="65" r="13" fill="#f5d89b"/><circle cx="160" cy="65" r="22" fill="none" stroke="#f5d89b" opacity=".35"/>
+      </svg>
+      <div className="bm-mystery-stats">{[[languages.length,lang("言語", "Languages")],[dates.length,lang("学習した日", "Study days")],[recovered,lang("誤答から正解へ", "Recovered questions")]].map(([n,label]) => <div key={label}><strong>{n}</strong><small>{label}</small></div>)}</div>
+      <p>{lang("間違いは、未来の正解の種。", "Every mistake is a seed of future success.")}</p>
+      {sample ? <div className="bm-mystery-card"><small>{lang("今日の小さな宝箱", "A little treasure")}</small><h3>{sample.example}</h3>{mysteryReveal && <><p>{sample.translation}</p><p>{sample.explanation}</p></>}<div className="bm-mystery-actions"><button type="button" onClick={() => setMysteryReveal(v=>!v)}>{lang("意味・解説", "Meaning")}</button><button type="button" onClick={() => speak(sample.example,book?.language)}>{lang("聞く", "Listen")}</button><button type="button" onClick={() => {setMysteryIndex(i=>i+1);setMysteryReveal(false);}}>{lang("次の宝箱", "Next treasure")}</button><button type="button" onClick={() => startStudy("study",sample.id)}>{lang("挑戦する", "Practice")}</button></div></div> : <p>{lang("例文と問題を登録すると宝箱が開きます。", "Add examples and questions to unlock treasures.")}</p>}
+    </section>;
+  }
+
   const renderers = {
     dashboard: renderDashboard,
     library: renderLibrary,
@@ -5205,6 +5231,7 @@ function Workspace({ user }) {
 
           <div className="bm-header-actions">
             <LanguagePicker />
+            <button type="button" className="bm-icon bm-mystery-trigger" aria-label="Mystery room" title="Something new…" onClick={() => setMysteryOpen(v=>!v)}>✦</button>
             <button
               className="bm-icon"
               aria-label={t("テーマを変更")}
@@ -5253,6 +5280,7 @@ function Workspace({ user }) {
           </Card>
         ) : (
           <div className="bm-content">
+            {mysteryOpen && renderMystery()}
             {renderers[page]?.()}
           </div>
         )}
@@ -5303,6 +5331,17 @@ function Workspace({ user }) {
 // ==================================================
 
 const STYLES = `
+.bm-mystery-trigger { color:#a78bfa !important; font-size:23px !important; }
+.bm-mystery { background:radial-gradient(ellipse at 50% 25%,#30365e,#13182c 75%);color:#f4f1ff;padding:24px;border-radius:22px;margin-bottom:20px;box-shadow:0 12px 32px #10152b33; }
+.bm-mystery h2,.bm-mystery h3,.bm-mystery p {color:#f4f1ff;overflow-wrap:anywhere;}
+.bm-mystery small {color:#c5c9e6;display:block;}
+.bm-mystery-top {display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.bm-mystery button {border:1px solid #ffffff40;background:#ffffff12;color:#fff;border-radius:10px;padding:9px 13px;cursor:pointer;}
+.bm-mystery-stats {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;text-align:center;}
+.bm-mystery-stats strong {display:block;font-size:28px;color:#f5d89b;}
+.bm-mystery-card {background:#ffffff0e;border:1px solid #ffffff25;border-radius:16px;padding:16px;margin-top:12px;}
+.bm-mystery-actions {display:flex;flex-wrap:wrap;gap:8px;}
+
 * {
   box-sizing: border-box;
 }
