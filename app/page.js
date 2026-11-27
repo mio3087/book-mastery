@@ -68,7 +68,6 @@ import {
 
 
 const EN_UI = {
-  "詳細解説アップグレード":"Upgrade explanations", "解説生成用JSONを出力":"Export explanation JSON", "更新プレビュー":"Update preview", "解説だけ更新":"Update explanations only", "参考書モード":"Reference mode", "学習モードを選ぶ":"Choose study mode", "順番学習":"Sequential study", "初学者モード":"Beginner mode", "章別学習":"Study by chapter", "全章":"All chapters", "スキップ":"Skip", "もう一度挑戦":"Retry", "使用場面":"Usage", "文法構造":"Structure", "前提知識":"Prerequisites", "活用表":"Conjugation", "複数の例文":"Examples", "間違いやすい点":"Common mistakes", "類似文法との比較":"Comparison", "覚え方":"Memory tip", "図解":"Diagram", "PDF電子書籍":"PDF e-books", "開始ページ":"Start page", "終了ページ（空欄は最後まで）":"End page (blank = last)", "抽出データを出力":"Export extracted data", "教材生成指示を出力":"Export generation prompt", "読み取り済みページ":"Extracted pages", "失敗ページ":"Failed pages", "抽出データを消去":"Clear extracted data",
   "ブラウザの保存機能を有効にしてください。プライベートブラウズではログインを保持できない場合があります。": "Enable browser storage. Private browsing may not retain sign-in.",
   "文法・知識を確認": "View grammar / knowledge",
   "解説を閉じる": "Hide explanation",
@@ -93,7 +92,7 @@ const EN_UI = {
   "本文は問題生成用です。JSON・CSVは登録前にプレビューしてください。": "Extracted text is for question generation. Preview JSON and CSV before saving.",
   "読み取りを中止": "Cancel reading",
   "失敗したファイルを再選択してください。": "Select failed files again.",
-  "合計200MB、1ファイル150MBまで。PDFはページ順に処理します。": "Up to 200 MB total, 150 MB per file. PDFs are processed page by page.",
+  "合計200MB、1ファイル50MBまで。PDFはページ順に処理します。": "Up to 200 MB total, 50 MB per file. PDFs are processed page by page.",
   "複数ファイルを選択": "Select multiple files",
   "保存済み": "Saved",
   "選択中の問題数": "Selected questions",
@@ -702,6 +701,7 @@ const NAVIGATION = [
   ["library", "My Library", LibraryBig],
   ["project", "Book Project", BookOpen],
   ["map", "Knowledge Map", Network],
+  ["universalMap", "教材横断マップ", Network],
   ["diagnostic", "Diagnostic Test", ClipboardCheck],
   ["study", "Study", Brain],
   ["mistakes", "Mistake Lab", AlertCircle],
@@ -954,30 +954,6 @@ function emptyBook() {
   };
 }
 
-const DEEP_FIELDS = {usage:"使用場面",structure:"文法構造",prerequisites:"前提知識",conjugation:"活用表",examples:"複数の例文",commonMistakes:"間違いやすい点",comparison:"類似文法との比較",memoryTip:"覚え方",diagram:"図解"};
-const EXPLANATION_FIELDS = ["explanation","rules","exceptions","example","translation","pronunciation","transfer","related",...Object.keys(DEEP_FIELDS)];
-function explanationPatch(row) {
-  const patch={};
-  for(const k of EXPLANATION_FIELDS) if(Object.hasOwn(row,k)) {
-    const v=row[k];
-    if(typeof v !== "string" && !(Object.hasOwn(DEEP_FIELDS,k) && v && typeof v === "object")) throw new Error(`Invalid field: ${k}`);
-    if(JSON.stringify(v).length>50000) throw new Error(`Field too large: ${k}`);
-    patch[k]=v;
-  }
-  if(new TextEncoder().encode(JSON.stringify(patch)).length>350000) throw new Error("Explanation too large");
-  return patch;
-}
-function DeepContent({item, language}) {
-  const {t}=useContext(LanguageContext);
-  if(!item)return null;
-  function display(v) {
-    if(typeof v === "string" || typeof v === "number") return <div className="bm-pre">{v}</div>;
-    if(Array.isArray(v)) return <div>{v.map((x,i)=><div key={i} className="bm-example" style={{marginBottom:8}}>{display(x)}{x?.sentence&&<Button secondary onClick={()=>speak(x.sentence,language)}><Volume2 size={15}/>{t("読み上げ")}</Button>}</div>)}</div>;
-    if(v && typeof v === "object") return <div>{Object.entries(v).map(([k,x])=><div key={k} style={{marginBottom:6}}><b>{({sentence:"例文",translation:"日本語訳",wrong:"誤文",correct:"正文",reason:"理由"})[k]||k}</b>{display(x)}</div>)}</div>;
-    return null;
-  }
-  return <>{Object.entries(DEEP_FIELDS).filter(([k])=>item[k] && (typeof item[k]!=="object"||Object.keys(item[k]).length)).map(([k,label])=><div key={k} style={{marginBottom:14}}><h4>{t(label)}</h4>{display(item[k])}</div>)}</>;
-}
 function emptyItem() {
   return {
     chapter: "",
@@ -1774,15 +1750,6 @@ function Workspace({ user }) {
   const [universalResults, setUniversalResults] = useState([]);
   const [universalRows, setUniversalRows] = useState([]);
   const [ocrPdf, setOcrPdf] = useState(true);
-  const [pdfStart,setPdfStart]=useState("1");
-  const [pdfEnd,setPdfEnd]=useState("");
-  const [pdfData,setPdfData]=useState([]);
-  const [upgradeRows,setUpgradeRows]=useState([]);
-  const [upgradeStatus,setUpgradeStatus]=useState("");
-  const [upgradeChapter,setUpgradeChapter]=useState("");
-  const [studyChapter,setStudyChapter]=useState("");
-  const [referenceMode,setReferenceMode]=useState(false);
-  const [referenceIndex,setReferenceIndex]=useState(0);
   const universalCancel = useRef(false);
   const scanLock = useRef(false);
   const scanGeneration = useRef(0);
@@ -1896,7 +1863,6 @@ function Workspace({ user }) {
     [data.attempts, book?.id]
   );
 
-  useEffect(()=>{setPdfData([]);setUpgradeRows([]);setUpgradeStatus("");setUpgradeChapter("");setStudyChapter("");setReferenceMode(false);setReferenceIndex(0);},[book?.id]);
   const mastery = useMemo(
     () => masteryEngine(items, questions, attempts),
     [items, questions, attempts]
@@ -1941,6 +1907,71 @@ function Workspace({ user }) {
     (sum, a) => sum + (Number(a.seconds) || 0),
     0
   );
+
+  // Book Mastery 3.0: non-destructive cross-book grouping.
+  const [mapLanguage, setMapLanguage] = useState("");
+  const [duplicateOnly, setDuplicateOnly] = useState(false);
+  const [mapQuery, setMapQuery] = useState("");
+  const [groupDraft, setGroupDraft] = useState({});
+  const allMastery = useMemo(() => masteryEngine(data.knowledgeItems, data.questions, data.attempts), [data.knowledgeItems, data.questions, data.attempts]);
+  const bookLookup = useMemo(() => new Map(data.books.map(b => [b.id,b])), [data.books]);
+  const language = mapLanguage || book?.language || data.books[0]?.language || "it";
+  const universalGroups = useMemo(() => {
+    const groups = new Map();
+    for (const item of data.knowledgeItems) {
+      if (bookLookup.get(item.bookId)?.language !== language) continue;
+      const key = normalize(item.universalTitle || item.title);
+      if (!key) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    return [...groups.entries()].map(([key,members]) => ({key,members,title:members[0].universalTitle || members[0].title}));
+  }, [data.knowledgeItems, bookLookup, language]);
+
+  async function linkKnowledge(members, title) {
+    if (!title.trim() || members.length > 450) return;
+    await runSave(async () => {
+      const batch = writeBatch(db);
+      for (const item of members) batch.update(doc(path("knowledgeItems"),item.id), {universalTitle:title.trim()});
+      await batch.commit();
+    }, "統合名を保存しました。元の教材・問題・履歴は保持されています。");
+  }
+  function exportAnki() {
+    const rows = data.knowledgeItems.filter(i => bookLookup.get(i.bookId)?.language === language && allMastery[i.id]?.attempts > 0 && (allMastery[i.id].recentAccuracy < 70 || allMastery[i.id].due));
+    const cells = rows.map(i => [i.title,i.pronunciation,i.explanation,i.example,i.translation].map(csvCell).join(","));
+    downloadFile("book-mastery-anki-"+language+".csv", "\uFEFF"+[["word","pronunciation","meaning","example","translation"].join(","),...cells].join("\n"), "text/csv;charset=utf-8");
+  }
+  function renderCoverage() {
+    if (!book) return null;
+    const toc = splitLines(book.toc);
+    const matched = toc.filter(line => items.some(i => [i.chapter,i.section,i.title].some(v => normalize(v) && normalize(v) === normalize(line))));
+    const missing = toc.filter(line => !matched.includes(line));
+    return <Card><h3>教材カバレッジ</h3>
+      <p>登録 {items.length}項目 / 未学習 {items.length-studied}項目 / 学習済み・未習得 {studied-mastered}項目 / 習得済み {mastered}項目</p>
+      <p>目次の完全一致: {matched.length} / {toc.length} 行</p>
+      {toc.length ? <details><summary>未照合の目次（{missing.length}件）</summary>{missing.map((line,index)=><p key={index}>{line}</p>)}</details> : <p>目次を登録すると未照合範囲を確認できます。</p>}
+      <small>目次の完全一致による候補です。未照合は未登録とは限らず、本文の網羅性も保証しません。</small>
+    </Card>;
+  }
+  function renderUniversalMap() {
+    const visible = universalGroups.filter(g => (!duplicateOnly || g.members.length > 1) && normalize(g.title).includes(normalize(mapQuery)));
+    return <><Card><h2>教材横断型知識マップ</h2>
+      <Field label="言語" value={language} onChange={setMapLanguage} options={[...new Set(data.books.map(b=>b.language).filter(Boolean))].map(l=>[l,languageName(l)])}/>
+      <Field label="知識を検索" value={mapQuery} onChange={setMapQuery}/>
+      <label><input type="checkbox" checked={duplicateOnly} onChange={e=>setDuplicateOnly(e.target.checked)}/> 重複候補のみ</label>
+      <p>{universalGroups.length} 知識グループ / 重複候補 {universalGroups.filter(g=>g.members.length>1).length}件</p>
+      <Button secondary onClick={exportAnki}>苦手・要復習項目をAnki CSV出力</Button>
+      <small>同名項目は候補として集約します。意味の一致は手動で確認してください。統合名を同じにすると別名の項目もまとめられます。</small>
+    </Card>{visible.map(g=>{
+      const r=g.members.map(i=>allMastery[i.id]);
+      const total=r.reduce((n,x)=>n+(x?.attempts||0),0);
+      return <Card key={g.key}><h3>{g.title}</h3><p>{g.members.length}項目 / 回答 {total}回 / 習得済み {r.filter(x=>x?.mastered).length}項目</p>
+      {g.members.map(i=><div key={i.id} className="bm-stat-line"><span>{bookLookup.get(i.bookId)?.title} · {i.title} · Lv.{allMastery[i.id]?.level||0}</span><Button secondary onClick={async()=>{if(await chooseBook(i.bookId)) navigate("map");}}>教材で確認</Button><Button secondary disabled={saving} onClick={()=>linkKnowledge([i],i.title+" ["+i.id+"]")}>分離</Button></div>)}
+      <Field label="統合名" value={groupDraft["k:"+g.key]??g.title} onChange={v=>setGroupDraft(prev=>({...prev,["k:"+g.key]:v}))}/>
+      <Button disabled={saving || !(groupDraft["k:"+g.key]??g.title).trim()} onClick={()=>linkKnowledge(g.members,groupDraft["k:"+g.key]??g.title)}>統合名を保存</Button>
+      </Card>;
+    })}{!visible.length && <Empty text="該当する知識項目がありません。"/>}</>;
+  }
 
   function skillRate(skills) {
     const values = records.flatMap((r) =>
@@ -2049,6 +2080,7 @@ function Workspace({ user }) {
     setSession(null);
     setSelectedItems([]);
     await saveSetting({ activeBookId: id });
+    return true;
   }
 
   function openBookForm(existing) {
@@ -2379,7 +2411,6 @@ function Workspace({ user }) {
 
         const item = {
           ...emptyItem(),
-          ...explanationPatch(row),
           chapter: String(
             readAlias(row, "chapter", "章")
           ),
@@ -2638,7 +2669,6 @@ function Workspace({ user }) {
   }
 
   function startStudy(mode = "study", targetItemId = "") {
-    if(saving)return;
     if (!book) {
       navigate("library");
       return;
@@ -2676,11 +2706,6 @@ function Workspace({ user }) {
       );
     }
 
-    if (["ordered","beginner","chapter"].includes(mode)) {
-      const candidates=questions.filter(q=>q.purpose==="study"&&(!targetItemId||q.itemId===targetItemId));
-      const orderedItems=[...items].filter(i=>mode!=="chapter"||!studyChapter||i.chapter===studyChapter).sort((a,b)=>`${a.chapter} ${a.section}`.localeCompare(`${b.chapter} ${b.section}`,"ja",{numeric:true})||(a.createdAt||0)-(b.createdAt||0));
-      queue=orderedItems.flatMap(i=>candidates.filter(q=>q.itemId===i.id).sort((a,b)=>Number(a.difficulty||2)-Number(b.difficulty||2))).slice(0,Math.min(200,settings.dailyMinutes*2));
-    }
     if (!queue.length) {
       setNotice(
         "出題できる問題がありません。知識マップで問題を追加してください。"
@@ -2698,9 +2723,7 @@ function Workspace({ user }) {
       finished: false,
     });
 
-    setReferenceMode(false);
     resetAnswer();
-    if(mode==="beginner"){setLessonOpen(true);setHintUsed(true);}
     navigate("study");
   }
 
@@ -2828,7 +2851,6 @@ function Workspace({ user }) {
       }));
 
       resetAnswer();
-      if(session.mode==="beginner"){setLessonOpen(true);setHintUsed(true);}
     }
   }
 
@@ -3228,8 +3250,8 @@ function Workspace({ user }) {
 
   async function universalRead(files) {
     if (!book || !files.length || scanLock.current || importLoading || saving) return;
-    if (files.length > 100 || files.some(f=>f.size>150*1024*1024) || files.reduce((n,f)=>n+f.size,0)>200*1024*1024) {
-      setScanStatus(t("合計200MB、1ファイル150MBまで。PDFはページ順に処理します。")); return;
+    if (files.length > 100 || files.some(f=>f.size>50*1024*1024) || files.reduce((n,f)=>n+f.size,0)>200*1024*1024) {
+      setScanStatus(t("合計200MB、1ファイル50MBまで。PDFはページ順に処理します。")); return;
     }
     const generation=scanGeneration.current;
     const active=()=>generation===scanGeneration.current;
@@ -3262,16 +3284,10 @@ function Workspace({ user }) {
             const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");
             pdfjs.GlobalWorkerOptions.workerSrc="/pdf.worker.min.mjs";
             task=pdfjs.getDocument({data:new Uint8Array(await f.arrayBuffer()),isEvalSupported:false}); pdf=await task.promise;
-            const first=Math.max(1,Math.floor(Number(pdfStart)||1));
-            const end=Math.min(pdf.numPages,Math.floor(Number(pdfEnd)||pdf.numPages));
-            if(first>end)throw new Error("Invalid page range");
-            const fileKey=JSON.stringify([f.name,f.size,f.lastModified]);
-            const labels=await pdf.getPageLabels().catch(()=>null);
-            for(let page=first;page<=end&&running();page++){
+            for(let page=1;page<=pdf.numPages&&running();page++){
               setScanStatus(`${i+1}/${files.length} ${f.name} — ${page}/${pdf.numPages}`);
-              let p,canvas;
+              const p=await pdf.getPage(page); let canvas;
               try {
-                p=await pdf.getPage(page);
                 const content=await p.getTextContent();
                 let text=content.items.map(x=>(x.str||"")+(x.hasEOL?"\n":" ")).join("").trim();
                 if(!text && ocrPdf && running()){
@@ -3280,13 +3296,8 @@ function Workspace({ user }) {
                   await p.render({canvasContext:canvas.getContext("2d"),viewport}).promise;
                   const w=await getWorker(); text=(await w.recognize(canvas)).data.text.trim();
                 }
-                if(running()){
-                  const entry={fileKey,file:f.name,page,total:pdf.numPages,label:labels?.[page-1]||null,text,status:text?"ok":"error"};
-                  setPdfData(old=>[...old.filter(x=>!(x.fileKey===fileKey&&x.page===page)),entry]);
-                  chunks.push(`[PDF page ${page}]\n${text||"[No extractable text]"}`);
-                }
-              } catch(e){if(running())setPdfData(old=>[...old.filter(x=>!(x.fileKey===fileKey&&x.page===page)),{fileKey,file:f.name,page,total:pdf.numPages,status:"error",text:"",error:e.message}]);}
-              finally {if(canvas){canvas.width=0;canvas.height=0;}p?.cleanup();}
+                chunks.push(`[PDF page ${page}]\n${text||"[No extractable text]"}`);
+              } finally {if(canvas){canvas.width=0;canvas.height=0;}p.cleanup();}
             }
           } else if(f.type.startsWith("image/")||/\.(jpg|jpeg|png|webp|bmp|tiff?)$/i.test(f.name)){
             const w=await getWorker();chunks.push((await w.recognize(f)).data.text.trim());
@@ -3302,62 +3313,15 @@ function Workspace({ user }) {
     } finally {try{if(worker)await worker.terminate();}catch{}scanLock.current=false;setScanBusy(false);}
   }
 
-  function exportExplanations(){
-    const selected=items.filter(i=>!upgradeChapter||i.chapter===upgradeChapter);
-    downloadFile("explanation-source.json",JSON.stringify({bookId:book.id,bookTitle:book.title,language:book.language,instruction:"既存IDを維持し、explanation, usage, structure, prerequisites, conjugation, examples, commonMistakes, comparison, memoryTip, diagram, rules, exceptions, transfer を詳しく生成してください。questionsは参照のみ、出力不要。未確認の出典は作らない。items配列で返す。",items:selected.map(i=>({...i,questions:questions.filter(q=>q.itemId===i.id)}))},null,2),"application/json");
-  }
-  async function previewUpgrade(files){
-    setUpgradeRows([]);setUpgradeStatus("");
-    const target=book.id;
-    try {
-      if(files.reduce((n,f)=>n+f.size,0)>20*1024*1024)throw new Error("20 MB limit");
-      const rows=[];
-      for(const f of files){const parsed=JSON.parse((await f.text()).replace(/^\uFEFF/,""));if(parsed.bookId&&parsed.bookId!==target)throw new Error("Book ID mismatch: "+f.name);const arr=Array.isArray(parsed)?parsed:parsed.items;if(!Array.isArray(arr))throw new Error("items array required");rows.push(...arr);}
-      const prepared=rows.map(row=>{try{
-        if(!row||typeof row!=="object")throw new Error("Invalid row");
-        if(row.bookId&&row.bookId!==target)throw new Error("Book ID mismatch");
-        const id=row.id||row.itemId;
-        const matches=items.filter(i=>id?i.id===id:row.title&&Object.hasOwn(row,"chapter")&&Object.hasOwn(row,"section")&&["chapter","section","title"].every(k=>normalize(i[k])===normalize(row[k])));
-        if(matches.length!==1)throw new Error(matches.length?"Ambiguous":"Not found");
-        const patch=explanationPatch(row);if(!Object.keys(patch).length)throw new Error("No explanation fields");
-        return {id:matches[0].id,title:matches[0].title,patch,bookId:target};
-      }catch(e){return {title:row?.title||row?.id||"?",error:e.message};}});
-      const counts={};for(const x of prepared)if(x.id)counts[x.id]=(counts[x.id]||0)+1;
-      setUpgradeRows(prepared.map(x=>counts[x.id]>1?{...x,error:"Duplicate update"}:x));
-    }catch(e){setUpgradeStatus(e.message);}
-  }
-  async function commitUpgrade(){
-    const rows=upgradeRows.filter(x=>!x.error&&x.bookId===book.id&&items.some(i=>i.id===x.id));
-    if(!rows.length||saving||!window.confirm(`${rows.length} explanations — OK?`))return;
-    downloadFile("explanation-backup.json",JSON.stringify({bookId:book.id,items:items.filter(i=>rows.some(x=>x.id===i.id))},null,2),"application/json");
-    let done=0;
-    const ok=await runSave(async()=>{for(const x of rows){await setDoc(doc(path("knowledgeItems"),x.id),{...x.patch,updatedAt:Date.now()},{merge:true});done++;setUpgradeStatus(`${done}/${rows.length}`);}});
-    setUpgradeRows(old=>old.filter(x=>!rows.slice(0,done).some(y=>y.id===x.id)));
-    setUpgradeStatus(`${done}/${rows.length} saved; ${rows.length-done} not saved${ok?"":" — retry"}`);
-  }
-  function renderUpgrade(){return <Card><h3>{t("詳細解説アップグレード")}</h3>
-    <Field label="章" value={upgradeChapter} onChange={setUpgradeChapter} options={[["","全章"],...[...new Set(items.map(i=>i.chapter).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ja",{numeric:true}))]}/>
-    <Button onClick={exportExplanations} disabled={!items.length}>{t("解説生成用JSONを出力")}</Button>
-    <label className="bm-field">JSON<input type="file" multiple accept=".json" disabled={saving} onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value="";void previewUpgrade(files);}}/></label>
-    <h4>{t("更新プレビュー")} {upgradeRows.length}</h4>
-    {upgradeRows.map((x,i)=><details key={i}><summary>{x.title} — {x.error||Object.keys(x.patch||{}).join(", ")}</summary>{!x.error&&<div className="bm-pre">{JSON.stringify(x.patch,null,2)}</div>}</details>)}
-    <Button disabled={saving||!upgradeRows.some(x=>!x.error&&x.bookId===book.id)} onClick={commitUpgrade}>{t("解説だけ更新")}</Button><p role="status">{upgradeStatus}</p></Card>;}
   function renderUniversalImport(){
     return <Card>
       <h3>{t("一括読み取り")} / Universal Import</h3>
       <p>{t("本文は問題生成用です。JSON・CSVは登録前にプレビューしてください。")}</p>
-      <h4>{t("PDF電子書籍")}</h4>
-      <div className="bm-grid two"><Field label="開始ページ" type="number" value={pdfStart} onChange={setPdfStart}/><Field label="終了ページ（空欄は最後まで）" type="number" value={pdfEnd} onChange={setPdfEnd}/></div>
-      <p>{t("読み取り済みページ")}: {pdfData.filter(x=>x.status==="ok").length} · {t("失敗ページ")}: {pdfData.filter(x=>x.status!=="ok").length}</p>
-      {pdfData.filter(x=>x.status!=="ok").map(x=><small key={x.fileKey+x.page}>{x.file} p.{x.page} {x.error||"No text"} </small>)}
-      <div className="bm-actions"><Button disabled={!pdfData.length} onClick={()=>downloadFile("pdf-extracted.json",JSON.stringify({bookId:book.id,bookTitle:book.title,pages:pdfData},null,2),"application/json")}>{t("抽出データを出力")}</Button>
-      <Button secondary disabled={!pdfData.length} onClick={()=>{const groups={};for(const x of pdfData.filter(x=>x.status==="ok")){const k=x.fileKey+":"+Math.floor((x.page-1)/10);(groups[k]||=[]).push(x);}downloadFile("pdf-generation-batches.json",JSON.stringify({instruction:"各バッチの本文を根拠に章・節・規則・例外・用例・問題を整理し、Book Mastery形式のitems配列を生成。詳細解説 fields: usage,structure,prerequisites,conjugation,examples,commonMistakes,comparison,memoryTip,diagram。PDFページと印刷ページを区別。未確認箇所は推測しない。各問題はtype,skill,prompt,answers,options,explanation,hint,purpose:study。原文の長い転載を避ける。",book:{title:book.title,language:book.language,type:book.type},batches:Object.values(groups).map(g=>g.sort((a,b)=>a.page-b.page))},null,2),"application/json");}}>{t("教材生成指示を出力")}</Button>
-      <Button secondary disabled={scanBusy||!pdfData.length} onClick={()=>setPdfData([])}>{t("抽出データを消去")}</Button></div>
       <label><input type="checkbox" checked={ocrPdf} disabled={scanBusy} onChange={e=>setOcrPdf(e.target.checked)}/>{t("スキャンPDFもOCRする")}</label>
       <div className="bm-field" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void universalRead(Array.from(e.dataTransfer.files||[]));}}>
         <label>{t("複数形式のファイルを選択")}<input type="file" multiple accept=".json,.csv,.txt,.md,.pdf,image/*" disabled={scanBusy||saving||importLoading} onChange={e=>{const files=Array.from(e.target.files||[]);e.target.value="";void universalRead(files);}}/></label>
       </div>
-      <small>{t("合計200MB、1ファイル150MBまで。PDFはページ順に処理します。")}</small>
+      <small>{t("合計200MB、1ファイル50MBまで。PDFはページ順に処理します。")}</small>
       {scanBusy&&<Button secondary onClick={()=>{universalCancel.current=true;}}>{t("読み取りを中止")}</Button>}
       <p role="status" aria-live="polite">{scanStatus}</p>
       {universalResults.map((r,i)=><p key={i}>{r.name} — {r.status==="done"?t("読み取り完了"):r.status==="error"?t("読み取り失敗"):r.status==="reading"?t("読み取り中"):"Waiting"} {r.detail}</p>)}
@@ -3510,9 +3474,9 @@ function Workspace({ user }) {
           </div>
         </Card>
 
+        {renderCoverage()}
         {renderInstantMastery()}
         {renderUniversalImport()}
-        {renderUpgrade()}
         {renderTextbookLab()}
 
         <Card>
@@ -3734,7 +3698,6 @@ function Workspace({ user }) {
                               </p>
                             )}
 
-                            <DeepContent item={item} language={book.language}/>
                             <div className="bm-skill-grid">
                               {SKILLS.map((skill) => (
                                 <div key={skill}>
@@ -3931,23 +3894,19 @@ function Workspace({ user }) {
     return <div className="bm-answer-panel">
       <h3>{currentItem?.title || t("解説")}</h3>
       {content.length ? content.map(([label,value]) => <div key={label} style={{marginBottom:12}}><b>{t(label)}</b><div className="bm-pre">{value}</div></div>) : <p>{t("この項目の解説は未登録です。")}</p>}
-      <DeepContent item={currentItem} language={book?.language}/>
     </div>;
   }
 
   function renderStudy() {
-    const ordered=[...items].filter(i=>!studyChapter||i.chapter===studyChapter).sort((a,b)=>`${a.chapter} ${a.section}`.localeCompare(`${b.chapter} ${b.section}`,"ja",{numeric:true})||(a.createdAt||0)-(b.createdAt||0));
-    const controls=<Card><h3>{t("学習モードを選ぶ")}</h3><Field label="章" value={studyChapter} onChange={v=>{setStudyChapter(v);setReferenceIndex(0);}} options={[["","全章"],...[...new Set(items.map(i=>i.chapter).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"ja",{numeric:true}))]}/><div className="bm-actions"><Button secondary onClick={()=>{setReferenceMode(true);setReferenceIndex(0);}}>{t("参考書モード")}</Button><Button secondary onClick={()=>startStudy("beginner")}>{t("初学者モード")}</Button><Button secondary onClick={()=>startStudy("ordered")}>{t("順番学習")}</Button><Button secondary onClick={()=>startStudy("chapter")}>{t("章別学習")}</Button><Button secondary onClick={()=>startStudy("mistakes")}>{t("苦手項目を学習")}</Button><Button secondary onClick={()=>startStudy("diagnostic")}>{t("初期診断を開始")}</Button></div></Card>;
-    if(referenceMode){const i=ordered[referenceIndex];return <>{controls}<Card><Button secondary onClick={()=>setReferenceMode(false)}>{t("閉じる")}</Button>{i&&<><h3>{i.chapter} · {i.title}</h3><div className="bm-pre">{i.explanation}</div>{["rules","exceptions","example","translation","transfer"].map(k=>i[k]&&<div className="bm-pre" key={k}>{i[k]}</div>)}<DeepContent item={i} language={book?.language}/><Button onClick={()=>startStudy("study",i.id)}>{t("この項目を学習")}</Button><div className="bm-actions"><Button secondary disabled={referenceIndex===0} onClick={()=>setReferenceIndex(n=>n-1)}>←</Button><span>{referenceIndex+1}/{ordered.length}</span><Button secondary disabled={referenceIndex+1>=ordered.length} onClick={()=>setReferenceIndex(n=>n+1)}>→</Button></div></>}</Card></>;}
     if (!session) {
       return (
-        <>{controls}<Card className="bm-empty">
+        <Card className="bm-empty">
           <Brain size={40} />
           <h2>Study Session</h2>
           <p>{t("習得度と誤答履歴から優先問題を選びます。")}</p>
 
           <Button onClick={() => startStudy()}>{t("学習開始")}</Button>
-        </Card></>
+        </Card>
       );
     }
 
@@ -4053,7 +4012,6 @@ function Workspace({ user }) {
 
     return (
       <div className="bm-study">
-        <details><summary>{t("学習モードを選ぶ")}</summary>{controls}</details>
         <div className="bm-between">
           <small>
             {session.mode.toUpperCase()} ·{" "}
@@ -4173,7 +4131,6 @@ function Workspace({ user }) {
                   <Button secondary disabled={saving} onClick={() => {setHintUsed(true);setHintOpen(v=>!v);}}><Lightbulb size={17}/>{t("ヒント")}</Button>
                   <Button secondary disabled={saving} onClick={() => {setHintUsed(true);setLessonOpen(v=>!v);}}><BookOpen size={17}/>{t(lessonOpen ? "解説を閉じる" : "文法・知識を確認")}</Button>
                 </>}
-                <Button secondary disabled={saving} onClick={()=>{if(session.index+1>=session.queue.length)setSession(p=>({...p,finished:true}));else{setSession(p=>({...p,index:p.index+1}));resetAnswer();if(session.mode==="beginner"){setLessonOpen(true);setHintUsed(true);}}}}>{t("スキップ")}</Button>
                 <Button secondary disabled={saving} onClick={() => {void submitAnswer(false,"unknown",true);}}><AlertCircle size={17}/>{t("わからない・解説を見る")}</Button>
               </div>
               {lessonOpen && renderStudyLesson()}
@@ -4672,7 +4629,7 @@ function Workspace({ user }) {
         </Card>
 
         <Card>
-          <h3>Book Mastery · 4.0</h3>
+          <h3>Book Mastery · Phase 1</h3>
           <p>
             Firebase Authentication / Cloud Firestore
           </p>
@@ -5177,6 +5134,7 @@ function Workspace({ user }) {
     library: renderLibrary,
     project: renderProject,
     map: renderMap,
+    universalMap: renderUniversalMap,
     diagnostic: renderDiagnostic,
     study: renderStudy,
     mistakes: renderMistakes,
@@ -5226,7 +5184,7 @@ function Workspace({ user }) {
         </nav>
 
         <div className="bm-sidebar-bottom">
-          <small>VERSION 4.0</small>
+          <small>PHASE 1</small>
           <span>One Book. 30 Days.</span>
         </div>
       </aside>
